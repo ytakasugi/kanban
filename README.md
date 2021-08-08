@@ -125,10 +125,143 @@ version = "0.1.0"
 edition = "2018"
 ```
 
-そして、この空のmain.rs。
+そして、空のmain.rs。
 
 ```rust
 fn main() {
     println!("Hello, world!");
 }
+```
+
+#### Loading Environment Variables w/dotenv
+
+crates
+
+- dotenv
+
+```toml
+[package]
+name = "kanban"
+version = "0.1.0"
+edition = "2018"
+
++[dependencies]
++dotenv = "0.15"
+```
+
+このクレートの役割は、カレントワーキングディレクトリにある`.env`から変数をロードして、プログラムの環境変数に追加するという、小さなシンプルなものです。ここでは、一般的な`.env`ファイルを使用します。
+
+```
+LOG_LEVEL=INFO
+LOG_FILE=server.log
+DATABASE_URL=postgres://postgres@172.24.244.57:5432/postgres 
+```
+
+`dotenv`を使用したmain.rsの更新
+
+```rust
+type StdErr = Box<dyn std::error::Error>;
+
+fn main() -> Result<(), StdErr> {
+    // loads env variables from .env
+    dotenv::dotenv()?;
+
+    // example
+    assert_eq!("INFO", std::env::var("LOG_LEVEL").unwrap());
+
+    Ok(())
+}
+```
+
+#### Handling Dates & Times w/chrono
+
+crates
+
+- chrono
+
+```toml
+[package]
+name = "kanban"
+version = "0.1.0"
+edition = "2018"
+
+[dependencies]
+dotenv = "0.15"
++chrono = "0.4"
+```
+
+Rustの日付や時間を扱うためのライブラリといえば`chrono`です。まだプロジェクトでは使用していませんが、いくつかの依存関係を追加した後、すぐに使用する予定です。
+
+#### Logging w/fern
+
+crates
+
+- log
+- fern
+
+```toml
+[package]
+name = "kanban"
+version = "0.1.0"
+edition = "2018"
+
+[dependencies]
+dotenv = "0.15"
+chrono = "0.4"
++log = "0.4"
++fern = "0.6"
+```
+
+LogはRustのロギング・ファサード・ライブラリです。ハイレベルなロギングAPIを提供していますが、実装を選ぶ必要があり、今回使用する実装はfernクレートです。`fern`を使うことで、ロギングのフォーマットを簡単にカスタマイズでき、また複数の出力を連鎖させることができるので、標準エラーとファイルにログを記録することができます。`log`と`fern`を追加した後、すべてのロギング設定と初期化を独自のモジュールにカプセル化してみましょう。
+
+```rust
+use std::env;
+use std::fs;
+use log::{debug, error, info, trace, warn};
+
+pub fn init() -> Result<(), fern::InitError> {
+    let log_level = env::var("LOG_LEVEL").unwrap_or("INFO".into());
+    let log_level = log_level
+        .parse::<log::LevelFilter>()
+        .unwrap_or(log::LevelFilter::Info);
+
+    let mut builder = fern::Dispatch::new()
+        .format(|out, message, record| {
+            out.finish(format_args!(
+                "[{}][{}][{}] {}",
+                chrono::Local::now().format("%H:%M:%S"),
+                record.target(),
+                record.level(),
+                message
+            ))
+        })
+        .level(log_level)
+        .chain(std::io::stderr());
+
+        let log_file = env::var("LOG_FILE").ok();
+            if let Some(log_file) = log_file {
+            let log_file = fs::File::create(log_file)?;
+            builder = builder.chain(log_file);
+        }
+
+        builder.apply()?;
+
+        trace!("TRACE output enabled");
+        debug!("DEBUG output enabled");
+        info!("INFO output enabled");
+        warn!("WARN output enabled");
+        error!("ERROR output enabled");
+
+    Ok(())
+}
+```
+
+そして、そのモジュールをmain.rsに追加します。
+
+INFOがデフォルトのログレベルなので、今このプログラムを実行すると、以下のようになります。
+
+```
+[00:06:13][disel_rocket::logger][INFO] INFO output enabled
+[00:06:13][disel_rocket::logger][WARN] WARN output enabled
+[00:06:13][disel_rocket::logger][ERROR] ERROR output enabled
 ```
