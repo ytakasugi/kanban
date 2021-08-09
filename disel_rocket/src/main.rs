@@ -1,4 +1,8 @@
+mod db;
 mod logger;
+mod models;
+mod routes;
+mod schema;
 
 type StdErr = Box<dyn std::error::Error>;
 

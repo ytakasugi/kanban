@@ -265,3 +265,308 @@ INFOがデフォルトのログレベルなので、今このプログラムを�
 [00:06:13][disel_rocket::logger][WARN] WARN output enabled
 [00:06:13][disel_rocket::logger][ERROR] ERROR output enabled
 ```
+
+#### JSON Serialization w/serde
+
+crates
+
+- serde
+- serde_json
+
+```toml
+[dependencies]
+dotenv = "0.15"
+- chrono = "0.4"
++ chrono = { version = "0.4", features = ["serde"] }
+log = "0.4"
+fern = "0.6"
++ serde = { version = "1.0", features = ["derive"] }
++ serde_json = "1.0"
+```
+
+Pro-tip：プロジェクトに新しい依存関係を追加するときは、既存の依存関係を調べて、その新しい依存関係が機能フラグとして設定されているかどうかを確認するとよいでしょう。この場合、`chrono`は`serde`を機能フラグとして持っており、これを有効にすると、`chrono`のすべての型に`serde::Serialize`と`serde::Deserialize`インプリメンテーションが追加されます。これにより、後々、`chrono`の型を独自の構造体で使用できるようになり、その構造体にも`serde::Serialize`と`serde::Deserialize`のインプリーションを導出することになります。
+
+#### Domain Modeling
+
+さて、ドメインのモデリングを始めましょう。ボードがあることはわかっているので
+
+```rust
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Board {
+    pub id: i64,
+    pub name: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+```
+
+新しいものをアンパックします。
+
+- `#[derive(serde::Serialize)]`Board用の`serde::Serialize impl`を派生させ、`serde_json crate`を使ってJSONにシリアライズできるようにします。
+- `#[serde(rename_all = "camelCase")]`シリアル化の際に`snake_case`のメンバー識別子をすべてキャメルケースにリネームします（デシリアライズの際にはその逆も可能）。これは、Rustではスネークケースの名前を使うことが慣習となっていますが、JSONはしばしばJSコードによって生成・消費され、JSの慣習ではメンバー識別子にキャメルケースを使うことになっているためです。
+- `id`を`u64`ではなく`i64`にしたのは奇妙な選択に思えるかもしれませんが、DBとしてPostgreSQLを使用しているので、PostgreSQLは符号付き整数型しかサポートしていないため、このようにしなければなりません。
+- `created_at`メンバは、他に良いソート順がない場合にエンティティを時系列でソートすることができるという理由以外では、常に持っていると便利です。
+
+さて、カードとステータスを追加してみましょう。
+
+```rust
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Card {
+    pub id: i64,
+    pub board_id: i64,
+    pub description: String,
+    pub status: Status,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Status {
+    Todo,
+    Doing,
+    Done,
+}
+```
+
+また、ボード上のすべてのカードの数をステータスごとにまとめた「ボードサマリー」を返すこともサポートしたいので、そのためのモデルを用意しました。
+
+```rust
+#[derive(serde::Serialize)]
+pub struct BoardSummary {
+    pub todo: i64,
+    pub doing: i64,
+    pub done: i64,
+}
+```
+
+APIを使用して新しいボードを作成する際、ユーザーはボード名を提供することができますが、そのIDはDBによって設定されるため、そのためのモデルも必要です。
+
+```rust
+#[derive(serde::Deserialize)]
+pub struct CreateBoard {
+    pub name: String,
+}
+```
+
+同様に、ユーザーはカードを作成することもできます。カードを作成する際に、ユーザーは新しいカードの説明と、どのボードに関連付けるかだけを提供したいと仮定します。新しいカードは、デフォルトのTodoステータスを取得し、そのIDはDBによって設定されます。
+
+```rust
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateCard {
+    pub board_id: i64,
+    pub description: String,
+}
+```
+
+カードを更新する際、ユーザーは説明やステータスのみを更新できるようにしたいとします。もしユーザーがボード間でカードを移動できるようにしたら、かなり奇妙なことになります。これはほとんどのプロジェクト管理アプリでは珍しい機能です。
+
+```rust
+#[derive(serde::Deserialize)]
+pub struct UpdateCard {
+    pub description: String,
+    pub status: Status,
+}
+```
+
+それらをそれぞれのモジュールに投入すると、次のようになります。
+
+```rust
+// for GET requests
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Board {
+    pub id: i64,
+    pub name: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Card {
+    pub id: i64,
+    pub board_id: i64,
+    pub description: String,
+    pub status: Status,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Status {
+    Todo,
+    Doing,
+    Done,
+}
+
+#[derive(serde::Serialize)]
+pub struct BoardSummary {
+    pub todo: i64,
+    pub doing: i64,
+    pub done: i64,
+}
+
+// for POST requests
+
+#[derive(serde::Deserialize)]
+pub struct CreateBoard {
+    pub name: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateCard {
+    pub board_id: i64,
+    pub description: String,
+}
+
+// for PATCH requests
+
+#[derive(serde::Deserialize)]
+pub struct UpdateCard {
+    pub description: String,
+    pub status: Status,
+}
+```
+
+そしてmain.rsを以下のように更新します。
+
+```rust
+mod logger;
++mod models;
+
+type StdErr = Box<dyn std::error::Error>;
+
+fn main() -> Result<(), StdErr> {
+    dotenv::dotenv()?;
+    logger::init()?;
+
+    Ok(())
+}
+```
+
+---
+
+### Sync Implementation
+
+#### SQL Schema Migrations w/diesel-cli
+
+crates
+
+- diesel-cli
+
+```
+cargo install diesel_cli
+```
+
+上記のコマンドが最初に動作しない場合は、diesel-cliがサポートしているすべてのデータベース用の開発ライブラリが揃っていないことが原因です。ここではPostgreSQLを使用しているので、これらのコマンドで開発ライブラリがインストールされていることを確認できます。
+
+```
+# macOS
+brew install postgresql
+
+# ubuntu
+apt-get install postgresql libpq-dev
+```
+
+そして、PostgreSQLをサポートするdiesel-cliのみをインストールするようにcargoに伝えることができます。
+
+```
+cargo install diesel_cli --no-default-features --features postgres
+```
+
+diesel-cliは、DATABASE_URL環境変数をチェックすることで、どのDBに接続すべきかを判断します。
+
+DBが現在稼働しており、DATABASE_URL環境変数が存在すると仮定して、プロジェクトをブートストラップするために実行する最初のdiesel-cliコマンドは以下の通りです。
+
+```
+diesel setup
+```
+
+これにより diesel-cliは`migrations`ディレクトリを作成し、そこでDBスキーマのマイグレーションを生成したり書いたりすることができます。最初のマイグレーションを生成してみましょう。
+
+
+```
+diesel migration generate create_boards
+```
+
+これにより、例えば`migrations/<year>-<month>-<day>-<time>_create_boards`という新しいディレクトリが作成され、`up.sql`と`down.sql`が作成され、ここに SQL クエリを記述します。upクエリは、DBスキーマを作成または変更するためのもので、ここではboardsテーブルを作成します。
+
+```sql
+-- create_boards up.sql
+CREATE TABLE IF NOT EXISTS boards (
+    id BIGSERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'utc')
+);
+
+-- seed db with some test data for local dev
+INSERT INTO boards
+(name)
+VALUES
+('Test board 1'),
+('Test board 2'),
+('Test board 3');
+```
+
+そして、downクエリは、upクエリで行ったスキーマの変更を元に戻すためのもので、ここでは作成したボードテーブルを削除しています。
+
+```sql
+-- create_boards down.sql
+DROP TABLE IF EXISTS boards;
+```
+
+また、いくつかのカードを保管する必要があります。
+
+```
+diesel migration generate create_cards
+```
+
+カードのアップクエリについて
+
+```sql
+-- create_cards up.sql
+CREATE TYPE STATUS_ENUM AS ENUM ('todo', 'doing', 'done');
+
+CREATE TABLE IF NOT EXISTS cards (
+    id BIGSERIAL PRIMARY KEY,
+    board_id BIGINT NOT NULL,
+    description TEXT NOT NULL,
+    status STATUS_ENUM NOT NULL DEFAULT 'todo',
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'utc'),
+    CONSTRAINT board_fk
+        FOREIGN KEY (board_id)
+        REFERENCES boards(id)
+        ON DELETE CASCADE
+);
+
+-- seed db with some test data for local dev
+INSERT INTO cards
+(board_id, description, status)
+VALUES
+(1, 'Test card 1', 'todo'),
+(1, 'Test card 2', 'doing'),
+(1, 'Test card 3', 'done'),
+(2, 'Test card 4', 'todo'),
+(2, 'Test card 5', 'todo'),
+(3, 'Test card 6', 'done'),
+(3, 'Test card 7', 'done');
+```
+
+そして、カードのダウンクエリ。
+
+```sql
+-- create_cards down.sql
+DROP TABLE IF EXISTS cards;
+```
+
+
+
+
+
+
+
+
+
